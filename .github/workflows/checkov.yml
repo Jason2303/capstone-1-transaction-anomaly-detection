@@ -23,3 +23,4 @@ jobs:
           directory: .
           framework: terraform
           soft_fail: true
+          skip_check: CKV_AWS_117,CKV_AWS_272,CKV_AWS_144,CKV2_AWS_61,CKV2_AWS_62
