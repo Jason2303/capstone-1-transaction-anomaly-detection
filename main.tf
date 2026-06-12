@@ -10,31 +10,103 @@ data "aws_partition" "current" {}
 
 #DynamoDB table. Has not been connected to Lambda2 yet
 resource "aws_dynamodb_table" "transaction_table" {
-  
+
   #hash-key represents my primary key in my defined schema
-  hash_key         = "transaction_id"
-  name             = "TransactionTable"
-  billing_mode     = "PAY_PER_REQUEST"
+  hash_key     = "transaction_id"
+  name         = "TransactionTable"
+  billing_mode = "PAY_PER_REQUEST"
+
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.kms_key.arn
+  }
 
   attribute {
     name = "transaction_id"
     type = "S"
   }
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
   tags = {
-    Name = "DynamoDB Table"
+    Name        = "DynamoDB Table"
     Environment = "Production"
   }
 }
 
+#KMS Key
+resource "aws_kms_key" "kms_key" {
+  description             = "Encryption key"
+  enable_key_rotation     = true
+  deletion_window_in_days = 20
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Id      = "key_1"
+    Statement = [
+      {
+        Sid    = "EnableIAMUserPermissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        },
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowLambda1roletousekey"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${aws_iam_role.lambda_1.name}"
+        },
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey",
+        ],
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowLambda2roletousekey"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${aws_iam_role.lambda_2.name}"
+        },
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey",
+        ],
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowCloudTrailtousekey"
+        Effect = "Allow"
+        Principal = {
+        Service = "cloudtrail.amazonaws.com"
+        }
+      Action = [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ]
+      Resource = "*"
+      }
+    ]
+  })
+}
+
 #CloudTrail 
 resource "aws_cloudtrail" "trails" {
-  depends_on = [aws_s3_bucket_policy.dynamobucket]
+  depends_on = [aws_s3_bucket_policy.dynamobucket, aws_sns_topic_policy.sns_policy]
 
   name                          = "trailfordynamodb002"
   s3_bucket_name                = aws_s3_bucket.dynamodbbucket001.id
   s3_key_prefix                 = "prefix"
-  include_global_service_events = false
+  include_global_service_events = true
+  is_multi_region_trail         = true
+  sns_topic_name                = aws_sns_topic.output.name
+  enable_log_file_validation    = true
+  kms_key_id                    = aws_kms_key.kms_key.arn
 
   event_selector {
     read_write_type           = "All"
@@ -45,6 +117,7 @@ resource "aws_cloudtrail" "trails" {
       values = ["arn:${data.aws_partition.current.partition}:dynamodb:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/TransactionTable"]
     }
   }
+
 }
 
 #CloudTrail bucket
@@ -59,7 +132,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "encrypted" {
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm     = "AES256"
+      sse_algorithm = "AES256"
     }
   }
 }
@@ -72,7 +145,7 @@ resource "aws_s3_bucket_versioning" "versioning" {
   }
 }
 
-#IAM Policy for Cloudtrail
+#IAM Policy on S3 Cloudtrail bucket
 data "aws_iam_policy_document" "dynamodbbucket" {
   statement {
     sid    = "AWSCloudTrailAclCheck"
@@ -122,11 +195,38 @@ resource "aws_s3_bucket_policy" "dynamobucket" {
   policy = data.aws_iam_policy_document.dynamodbbucket.json
 }
 
+# Dead letter queue for lambda functions
+resource "aws_sqs_queue" "queue_deadletter" {
+  name = "deadletter-queue"
+}
 
+#SQS resource poilicy
+resource "aws_sqs_queue_policy" "deadletter_policy" {
+  queue_url = aws_sqs_queue.queue_deadletter.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowLambdaToSendMessage"
+        Effect = "Allow"
+        Principal = {
+          AWS = [
+            aws_iam_role.lambda_1.arn,
+            aws_iam_role.lambda_2.arn
+          ]
+        }
+        Action   = "sqs:SendMessage"
+        Resource = aws_sqs_queue.queue_deadletter.arn
+      }
+    ]
+  })
+}
 
 #SNS Topic
 resource "aws_sns_topic" "output" {
-  name = "transactions"
+  name              = "transactions"
+  kms_master_key_id = aws_kms_key.kms_key.arn
 }
 
 #SNS Subscription
@@ -136,15 +236,54 @@ resource "aws_sns_topic_subscription" "to_email" {
   endpoint  = var.email
 }
 
+#SNS Policy Document
+resource "aws_sns_topic_policy" "sns_policy" {
+  arn = aws_sns_topic.output.arn
+
+  policy = data.aws_iam_policy_document.sns_topic_policy.json
+}
+
+data "aws_iam_policy_document" "sns_topic_policy" {
+  policy_id = "AllowCloudTrail"
+
+  statement {
+    actions = [
+      "SNS:Publish",
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceArn"
+
+      values = [
+        "arn:${data.aws_partition.current.partition}:cloudtrail:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:trail/trailfordynamodb002",
+      ]
+    }
+
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+
+    resources = [
+      aws_sns_topic.output.arn,
+    ]
+
+    sid = "ToAllowCloudTrail"
+  }
+}
+
 #Eventbridge to send requests from Lambda1 to Lambda2. Has not been connected yet
 resource "aws_cloudwatch_event_bus" "transaction_event_bus" {
-  name              = "transaction-event-bus"
+  name = "transaction-event-bus"
 
   tags = {
-    Name = "Transaction Event Bus"
+    Name        = "Transaction Event Bus"
     Environment = "Production"
   }
-  
+
 }
 
 #IAM execution role for lambda1
@@ -165,7 +304,7 @@ resource "aws_iam_role" "lambda_1" {
   })
 
   tags = {
-    Name = "Execution Role"
+    Name        = "Execution Role"
     Environment = "Production"
   }
 }
@@ -180,35 +319,41 @@ resource "aws_iam_policy" "lambda1_policy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Action = "events:PutEvents"
-        Effect = "Allow"
-        Sid = "PutEvents"
+        Action   = "events:PutEvents"
+        Effect   = "Allow"
+        Sid      = "PutEvents"
         Resource = "arn:aws:events:us-east-1:${data.aws_caller_identity.current.account_id}:event-bus/transaction-event-bus"
       },
       {
-        Action = "logs:CreateLogGroup"
-        Effect = "Allow"
-        Sid = "CreateLogGroup"
+        Action   = "logs:CreateLogGroup"
+        Effect   = "Allow"
+        Sid      = "CreateLogGroup"
         Resource = "arn:aws:logs:us-east-1:${data.aws_caller_identity.current.account_id}:log-group:*"
       },
       {
-        Action = "logs:CreateLogStream"
-        Effect = "Allow"
-        Sid = "CreateLogStream"
+        Action   = "logs:CreateLogStream"
+        Effect   = "Allow"
+        Sid      = "CreateLogStream"
         Resource = "arn:aws:logs:us-east-1:${data.aws_caller_identity.current.account_id}:log-group:*:log-stream:*"
       },
       {
-        Action = "logs:PutLogEvents"
-        Effect = "Allow"
-        Sid = "PutLogsEvents"
+        Action   = "logs:PutLogEvents"
+        Effect   = "Allow"
+        Sid      = "PutLogsEvents"
         Resource = "arn:aws:logs:us-east-1:${data.aws_caller_identity.current.account_id}:log-group:*:log-stream:*"
+      },
+      {
+        Action   = "sqs:SendMessage"
+        Effect   = "Allow"
+        Sid      = "Sendmessagetosqsdeadletterqueue"
+        Resource = "arn:aws:sqs:us-east-1:${data.aws_caller_identity.current.account_id}:${aws_sqs_queue.queue_deadletter.name}"
       }
     ]
   })
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_attach_1" {
-  role  = aws_iam_role.lambda_1.name
+  role       = aws_iam_role.lambda_1.name
   policy_arn = aws_iam_policy.lambda1_policy.arn
 }
 
@@ -226,9 +371,21 @@ resource "aws_lambda_function" "lambda1" {
   role          = aws_iam_role.lambda_1.arn
   handler       = "lambda1.lambda_generate"
   code_sha256   = data.archive_file.lambda1.output_base64sha256
+  kms_key_arn   = aws_kms_key.kms_key.arn
 
   runtime = "python3.13"
 
+  #For X-ray tracing
+  tracing_config {
+    mode = "Active"
+  }
+
+  #For messages not sent to SNS
+  dead_letter_config {
+    target_arn = aws_sqs_queue.queue_deadletter.arn
+  }
+
+  #Environment variables
   environment {
     variables = {
       ENVIRONMENT = "Production"
@@ -260,7 +417,7 @@ resource "aws_iam_role" "lambda_2" {
   })
 
   tags = {
-    Name = "Lambda Processor"
+    Name        = "Lambda Processor"
     Environment = "Production"
   }
 }
@@ -275,40 +432,46 @@ resource "aws_iam_policy" "lambda2_policy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Action = "sns:Publish"
-        Effect = "Allow"
-        Sid = "PutMessage"
+        Action   = "sns:Publish"
+        Effect   = "Allow"
+        Sid      = "PutMessage"
         Resource = "arn:aws:sns:us-east-1:${data.aws_caller_identity.current.account_id}:${aws_sns_topic.output.name}"
       },
       {
-        Action = "logs:CreateLogGroup"
-        Effect = "Allow"
-        Sid = "CreateLogGroup"
+        Action   = "logs:CreateLogGroup"
+        Effect   = "Allow"
+        Sid      = "CreateLogGroup"
         Resource = "arn:aws:logs:us-east-1:${data.aws_caller_identity.current.account_id}:log-group:*"
       },
       {
-        Action = "logs:CreateLogStream"
-        Effect = "Allow"
-        Sid = "CreateLogStream"
+        Action   = "logs:CreateLogStream"
+        Effect   = "Allow"
+        Sid      = "CreateLogStream"
         Resource = "arn:aws:logs:us-east-1:${data.aws_caller_identity.current.account_id}:log-group:*:log-stream:*"
       },
       {
-        Action = "logs:PutLogEvents"
-        Effect = "Allow"
-        Sid = "PutLogsEvents"
+        Action   = "logs:PutLogEvents"
+        Effect   = "Allow"
+        Sid      = "PutLogsEvents"
         Resource = "arn:aws:logs:us-east-1:${data.aws_caller_identity.current.account_id}:log-group:*:log-stream:*"
       },
       {
-        Action = "dynamodb:PutItem"
-        Effect = "Allow"
-        Sid = "PutItemInDynamoDB"
+        Action   = "dynamodb:PutItem"
+        Effect   = "Allow"
+        Sid      = "PutItemInDynamoDB"
         Resource = "arn:aws:dynamodb:us-east-1:${data.aws_caller_identity.current.account_id}:table/TransactionTable"
       },
       {
-        Action = "dynamodb:GetItem"
-        Effect = "Allow"
-        Sid = "GetItemFromDynamoDB"
+        Action   = "dynamodb:GetItem"
+        Effect   = "Allow"
+        Sid      = "GetItemFromDynamoDB"
         Resource = "arn:aws:dynamodb:us-east-1:${data.aws_caller_identity.current.account_id}:table/TransactionTable"
+      },
+      {
+        Action   = "sqs:SendMessage"
+        Effect   = "Allow"
+        Sid      = "Sendmessagetosqsdeadletterqueue"
+        Resource = "arn:aws:sqs:us-east-1:${data.aws_caller_identity.current.account_id}:${aws_sqs_queue.queue_deadletter.name}"
       }
     ]
   })
@@ -316,7 +479,7 @@ resource "aws_iam_policy" "lambda2_policy" {
 
 #Attaches IAM Role and Policy to Lambda2
 resource "aws_iam_role_policy_attachment" "lambda_attach_2" {
-  role  = aws_iam_role.lambda_2.name
+  role       = aws_iam_role.lambda_2.name
   policy_arn = aws_iam_policy.lambda2_policy.arn
 }
 
@@ -334,13 +497,24 @@ resource "aws_lambda_function" "lambda2" {
   role          = aws_iam_role.lambda_2.arn
   handler       = "lambda2.lambda_processor"
   code_sha256   = data.archive_file.lambda2.output_base64sha256
+  kms_key_arn   = aws_kms_key.kms_key.arn
 
   runtime = "python3.13"
 
+  #For X-ray tracing
+  tracing_config {
+    mode = "Active"
+  }
+
+  # For messages not sent to SNS
+  dead_letter_config {
+    target_arn = aws_sqs_queue.queue_deadletter.arn
+  }
+
   environment {
     variables = {
-      ENVIRONMENT = "Production"
-      LOG_LEVEL   = "info"
+      ENVIRONMENT   = "Production"
+      LOG_LEVEL     = "info"
       SNS_TOPIC_ARN = aws_sns_topic.output.arn
     }
   }
@@ -353,21 +527,21 @@ resource "aws_lambda_function" "lambda2" {
 
 #EventBridge Rule
 resource "aws_cloudwatch_event_rule" "allow_access_to_lambda_2" {
-  name        = "events_lambda2"
-  description = "Put events in Lambda2 function"
+  name           = "events_lambda2"
+  description    = "Put events in Lambda2 function"
   event_bus_name = aws_cloudwatch_event_bus.transaction_event_bus.name
 
   event_pattern = jsonencode({
-    source = ["transaction.generator"]
+    source      = ["transaction.generator"]
     detail-type = ["TransactionEvent"]
   })
 }
 
 #EventBridge targets the Lambda function
 resource "aws_cloudwatch_event_target" "lambda2" {
-  rule      = aws_cloudwatch_event_rule.allow_access_to_lambda_2.name
-  target_id = "SendToLambda"
-  arn       = aws_lambda_function.lambda2.arn
+  rule           = aws_cloudwatch_event_rule.allow_access_to_lambda_2.name
+  target_id      = "SendToLambda"
+  arn            = aws_lambda_function.lambda2.arn
   event_bus_name = aws_cloudwatch_event_bus.transaction_event_bus.name
 }
 
