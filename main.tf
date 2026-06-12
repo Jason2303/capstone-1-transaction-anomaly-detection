@@ -197,6 +197,12 @@ resource "aws_iam_policy" "cloudtrail_policy" {
     Version = "2012-10-17"
     Statement = [
       {
+        Action   = "logs:CreateLogStream"
+        Effect   = "Allow"
+        Sid      = "CreateLogStream"
+        Resource = "arn:aws:logs:us-east-1:${data.aws_caller_identity.current.account_id}:log-group:${aws_cloudwatch_log_group.cloudtrail_loggroup.name}:log-stream:*"
+      },
+      {
         Action   = "logs:PutLogEvents"
         Effect   = "Allow"
         Sid      = "PutLogsEvents"
@@ -485,6 +491,7 @@ data "archive_file" "lambda1" {
 # Lambda generator function
 #checkov:skip=CKV_AWS_117:Lambda functions communicate with AWS managed services via IAM-controlled endpoints. VPC not required.
 #checkov:skip=CKV_AWS_272:Code signing not required for this single-developer portfolio project
+#checkov:skip=CKV_AWS_115:Reserved concurrency not supported on this account tier
 resource "aws_lambda_function" "lambda1" {
   filename                       = data.archive_file.lambda1.output_path
   function_name                  = "lambda1_generator"
@@ -492,7 +499,6 @@ resource "aws_lambda_function" "lambda1" {
   handler                        = "lambda1.lambda_generate"
   code_sha256                    = data.archive_file.lambda1.output_base64sha256
   kms_key_arn                    = aws_kms_key.kms_key.arn
-  reserved_concurrent_executions = 10
 
   runtime = "python3.13"
 
@@ -614,6 +620,7 @@ data "archive_file" "lambda2" {
 # Lambda processor function
 #checkov:skip=CKV_AWS_117:Lambda functions communicate with AWS managed services via IAM-controlled endpoints. VPC not required.
 #checkov:skip=CKV_AWS_272:Code signing not required for this single-developer portfolio project
+#checkov:skip=CKV_AWS_115:Reserved concurrency not supported on this account tier
 resource "aws_lambda_function" "lambda2" {
   filename                       = data.archive_file.lambda2.output_path
   function_name                  = "lambda2_processor"
@@ -621,7 +628,6 @@ resource "aws_lambda_function" "lambda2" {
   handler                        = "lambda2.lambda_processor"
   code_sha256                    = data.archive_file.lambda2.output_base64sha256
   kms_key_arn                    = aws_kms_key.kms_key.arn
-  reserved_concurrent_executions = 10
 
   runtime = "python3.13"
 
