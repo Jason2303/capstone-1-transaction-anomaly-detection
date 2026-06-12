@@ -25,8 +25,11 @@ This pipeline simulates the detection layer that sits between a payment processo
 The pipeline ingests 20 mock transactions from `lambda/mock_transactions.json`, each representing a debit payment in a Nigerian banking context. Lambda1 publishes each transaction as an event to a custom EventBridge bus, which routes it to Lambda2 for anomaly detection.
 Lambda2 runs four independent checks on every transaction:
 **Successful payment** — `requested_amount == approved_amount`. The full amount was approved. An SNS alert is fired confirming the transaction completed as expected.
+
 **Failed payment** — `requested_amount > approved_amount`. The bank approved a partial amount or nothing at all. Common in Nigerian banking when accounts have insufficient funds or the receiving bank rejects the full transfer. An alert is fired with both amounts for reconciliation.
+
 **Timeout** — the difference between `transaction_time` and `approved_time` exceeds 5 minutes. Prolonged approval times indicate network congestion, USSD session drops, or downstream bank delays — a chronic issue on Nigerian payment rails. An alert is fired with the transaction timestamp for investigation.
+
 **Duplicate charge** — a `PutItem` with `attribute_not_exists(transaction_id)` is attempted. If DynamoDB rejects the write with `ConditionalCheckFailedException`, the transaction ID already exists, indicating a retry-induced duplicate charge. An alert is fired immediately.
 All alerts are published to SNS with full transaction detail — transaction ID, beneficiary, amounts, bank, and timestamps — and delivered to the subscribed email address as well as CloudTrail logs.
 
