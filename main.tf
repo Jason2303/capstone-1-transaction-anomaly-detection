@@ -27,7 +27,7 @@ resource "aws_dynamodb_table" "transaction_table" {
   }
 }
 
-#CloudTrail for DynamoDB
+#CloudTrail 
 resource "aws_cloudtrail" "trails" {
   depends_on = [aws_s3_bucket_policy.dynamobucket]
 
@@ -53,7 +53,7 @@ resource "aws_s3_bucket" "dynamodbbucket001" {
   force_destroy = true
 }
 
-#S3 bucket encryption
+#CloudTrail bucket encryption
 resource "aws_s3_bucket_server_side_encryption_configuration" "encrypted" {
   bucket = aws_s3_bucket.dynamodbbucket001.id
 
@@ -64,7 +64,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "encrypted" {
   }
 }
 
-#S3 bucket versioning
+#CloudTrail bucket versioning
 resource "aws_s3_bucket_versioning" "versioning" {
   bucket = aws_s3_bucket.dynamodbbucket001.id
   versioning_configuration {
