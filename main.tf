@@ -64,6 +64,7 @@ resource "aws_kms_key" "kms_key" {
         Action = [
           "kms:Decrypt",
           "kms:GenerateDataKey",
+          "kms:DescribeKey"
         ],
         Resource = "*"
       },
@@ -76,6 +77,7 @@ resource "aws_kms_key" "kms_key" {
         Action = [
           "kms:Decrypt",
           "kms:GenerateDataKey",
+          "kms:DescribeKey"
         ],
         Resource = "*"
       },
@@ -87,7 +89,8 @@ resource "aws_kms_key" "kms_key" {
         }
         Action = [
           "kms:GenerateDataKey",
-          "kms:Decrypt"
+          "kms:Decrypt",
+          "kms:DescribeKey"
         ]
         Resource = "*"
       },
@@ -99,8 +102,23 @@ resource "aws_kms_key" "kms_key" {
         }
         Action = [
           "kms:Encrypt",
-          "kms:GenerateDataKey",
           "kms:Decrypt",
+          "kms:GenerateDataKey",
+          "kms:DescribeKey"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowCloudWatchLogstousekey"
+        Effect = "Allow"
+        Principal = {
+          Service = "logs.us-east-1.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:GenerateDataKey",
+          "kms:DescribeKey"
         ]
         Resource = "*"
       }
@@ -120,6 +138,8 @@ resource "aws_cloudtrail" "trails" {
   sns_topic_name                = aws_sns_topic.output.name
   enable_log_file_validation    = true
   kms_key_id                    = aws_kms_key.kms_key.arn
+  cloud_watch_logs_group_arn = "${aws_cloudwatch_log_group.cloudtrail_loggroup.arn}:*"
+  cloud_watch_logs_role_arn = aws_iam_role.cloudtrail.arn
 
   event_selector {
     read_write_type           = "All"
@@ -133,8 +153,68 @@ resource "aws_cloudtrail" "trails" {
 
 }
 
+#CloudWatch Log Group
+resource "aws_cloudwatch_log_group" "cloudtrail_loggroup" {
+  name = "CTLogGroup"
+  kms_key_id = aws_kms_key.kms_key.arn
+
+  tags = {
+    Environment = "Production"
+  }
+}
+
+#IAM execution role for CloudTrail
+resource "aws_iam_role" "cloudtrail" {
+  name = "execution_role_cloudtrail"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Sid    = "AssumeRole"
+        Principal = {
+          Service = "cloudtrail.amazonaws.com"
+        }
+      },
+    ]
+  })
+
+  tags = {
+    Name        = "Execution Role"
+    Environment = "Production"
+  }
+}
+
+#IAM policy for CloudTrail
+resource "aws_iam_policy" "cloudtrail_policy" {
+  name        = "cloudtrail_policy"
+  path        = "/"
+  description = "Policy for CloudTrail"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action   = "logs:PutLogEvents"
+        Effect   = "Allow"
+        Sid      = "PutLogsEvents"
+        Resource = "arn:aws:logs:us-east-1:${data.aws_caller_identity.current.account_id}:log-group:${aws_cloudwatch_log_group.cloudtrail_loggroup.name}:log-stream:*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "cloudtrail_attach" {
+  role       = aws_iam_role.cloudtrail.name
+  policy_arn = aws_iam_policy.cloudtrail_policy.arn
+}
+
+
 #CloudTrail bucket
+#checkov:skip=CKV2_AWS_61:Lifecycle policy not required for this portfolio project
 #checkov:skip=CKV_AWS_144:Cross-region replication not required for this use case
+#checkov:skip=CKV2_AWS_62:S3 event notifications not required for this portfolio project
 resource "aws_s3_bucket" "dynamodbbucket001" {
   bucket        = "dynamodbtrails1244"
   force_destroy = true
@@ -150,6 +230,15 @@ resource "aws_s3_bucket_logging" "logging_bucket" {
       partition_date_source = "EventTime"
     }
   }
+}
+
+resource "aws_s3_bucket_public_access_block" "block_public_access" {
+  bucket = aws_s3_bucket.dynamodbbucket001.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
 #CloudTrail bucket encryption
