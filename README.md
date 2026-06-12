@@ -1,6 +1,6 @@
 # Transaction Anomaly Detection Pipeline
 
-A serverless event-driven pipeline that detects payment anomalies in real time — successful transactons, failed transactions, timeouts, and duplicate charges — modelled on chronic failure patterns in Nigerian banking infrastructure.
+A serverless event-driven pipeline that detects payment anomalies in real time — successful transactions, failed transactions, timeouts, and duplicate charges — modelled on chronic failure patterns in Nigerian banking infrastructure.
 
 Built as a cloud security engineering portfolio project demonstrating AWS security architecture, infrastructure-as-code, and DevSecOps practices.
 
@@ -22,37 +22,37 @@ This pipeline simulates the detection layer that sits between a payment processo
 
 ## How It Works
 
-The pipeline ingests 20 mock transactions from lambda/mock_transactions.json, each representing a debit payment in a Nigerian banking context. Lambda1 publishes each transaction as an event to a custom EventBridge bus, which routes it to Lambda2 for anomaly detection.
+The pipeline ingests 20 mock transactions from `lambda/mock_transactions.json`, each representing a debit payment in a Nigerian banking context. Lambda1 publishes each transaction as an event to a custom EventBridge bus, which routes it to Lambda2 for anomaly detection.
 Lambda2 runs four independent checks on every transaction:
-Successful payment — requested_amount == approved_amount. The full amount was approved. An SNS alert is fired confirming the transaction completed as expected.
-Failed payment — requested_amount > approved_amount. The bank approved a partial amount or nothing at all. Common in Nigerian banking when accounts have insufficient funds or the receiving bank rejects the full transfer. An alert is fired with both amounts for reconciliation.
-Timeout — the difference between transaction_time and approved_time exceeds 5 minutes. Prolonged approval times indicate network congestion, USSD session drops, or downstream bank delays — a chronic issue on Nigerian payment rails. An alert is fired with the transaction timestamp for investigation.
-Duplicate charge — a PutItem with attribute_not_exists(transaction_id) is attempted. If DynamoDB rejects the write with ConditionalCheckFailedException, the transaction ID already exists, indicating a retry-induced duplicate charge. An alert is fired immediately.
+**Successful payment** — `requested_amount == approved_amount`. The full amount was approved. An SNS alert is fired confirming the transaction completed as expected.
+**Failed payment** — `requested_amount > approved_amount`. The bank approved a partial amount or nothing at all. Common in Nigerian banking when accounts have insufficient funds or the receiving bank rejects the full transfer. An alert is fired with both amounts for reconciliation.
+**Timeout** — the difference between `transaction_time` and `approved_time` exceeds 5 minutes. Prolonged approval times indicate network congestion, USSD session drops, or downstream bank delays — a chronic issue on Nigerian payment rails. An alert is fired with the transaction timestamp for investigation.
+**Duplicate charge** — a `PutItem` with `attribute_not_exists(transaction_id)` is attempted. If DynamoDB rejects the write with `ConditionalCheckFailedException`, the transaction ID already exists, indicating a retry-induced duplicate charge. An alert is fired immediately.
 All alerts are published to SNS with full transaction detail — transaction ID, beneficiary, amounts, bank, and timestamps — and delivered to the subscribed email address as well as CloudTrail logs.
 
 ---
 
 ## Design Decisions
 
-DynamoDB over RDS — this pipeline processes discrete transaction events, not relational data requiring joins. DynamoDB's single-table design maps directly to the event schema, eliminates connection pooling overhead in Lambda, and scales to zero cost when idle.
+**DynamoDB over RDS** — this pipeline processes discrete transaction events, not relational data requiring joins. DynamoDB's single-table design maps directly to the event schema, eliminates connection pooling overhead in Lambda, and scales to zero cost when idle.
 
-DynamoDB over S3 — S3 is object storage optimised for files, not low-latency key-value lookups. Duplicate detection requires single-item reads with millisecond response times. DynamoDB's GetItem and conditional PutItem operations are purpose-built for this pattern; S3 is not.
+**DynamoDB over S3** — S3 is object storage optimised for files, not low-latency key-value lookups. Duplicate detection requires single-item reads with millisecond response times. DynamoDB's `GetItem` and conditional `PutItem` operations are purpose-built for this pattern; S3 is not.
 
-PAY_PER_REQUEST over provisioned capacity — transaction volume is unpredictable and bursty. Provisioned capacity requires capacity planning and risks over/under-provisioning. On-demand billing means cost tracks actual usage with no idle overhead.
+**`PAY_PER_REQUEST` over provisioned capacity** — transaction volume is unpredictable and bursty. Provisioned capacity requires capacity planning and risks over/under-provisioning. On-demand billing means cost tracks actual usage with no idle overhead.
 
-No multi-AZ replicas — this is a detection and alerting pipeline, not a financial transaction processor. The source of truth remains the bank's core system. Replica lag and added cost are not justified for an anomaly notification service.
+**No multi-AZ replicas** — this is a detection and alerting pipeline, not a financial transaction processor. The source of truth remains the bank's core system. Replica lag and added cost are not justified for an anomaly notification service.
 
-EventBridge over SQS for event routing — SQS is a queue; EventBridge is an event bus. The pipeline routes transaction events based on source and detail-type, which is a filtering and routing concern. EventBridge's rule-based routing to Lambda is a cleaner fit. SQS is still used where it belongs — as a Dead Letter Queue for failed Lambda invocations.
+**EventBridge over SQS for event routing** — SQS is a queue; EventBridge is an event bus. The pipeline routes transaction events based on source and detail-type, which is a filtering and routing concern. EventBridge's rule-based routing to Lambda is a cleaner fit. SQS is still used where it belongs — as a Dead Letter Queue for failed Lambda invocations.
 
-Conditional writes for duplicate detection — attribute_not_exists(transaction_id) on PutItem makes duplicate detection atomic, eliminating the race condition that a GetItem + PutItem approach creates under concurrent Lambda execution.
+**Conditional writes for duplicate detection** — `attribute_not_exists(transaction_id)` on `PutItem` makes duplicate detection atomic, eliminating the race condition that a `GetItem` + `PutItem` approach creates under concurrent Lambda execution.
 
-No VPC — Lambda communicates with DynamoDB, SNS, EventBridge, and SQS via AWS-managed endpoints controlled by IAM. A VPC would add NAT Gateway cost and network complexity without improving the security posture for this architecture.
+**No VPC** — Lambda communicates with DynamoDB, SNS, EventBridge, and SQS via AWS-managed endpoints controlled by IAM. A VPC would add NAT Gateway cost and network complexity without improving the security posture for this architecture.
 
-aws_iam_role_policy_attachment over aws_iam_role_policy_attachments_exclusive — the exclusive variant has a known teardown ordering issue that causes DeletePolicy failures during terraform destroy. The standard attachment resource detaches cleanly and avoids requiring multiple destroy runs.
+**`aws_iam_role_policy_attachment` over `aws_iam_role_policy_attachments_exclusive`** — the exclusive variant has a known teardown ordering issue that causes DeletePolicy failures during terraform destroy. The standard attachment resource detaches cleanly and avoids requiring multiple terraform destroy runs.
 
-Terraform for Lambda provisioning over Boto3 — Boto3 scripting for infrastructure is imperative and stateless with no drift detection or rollback. Terraform's declarative model tracks state and allows clean destroy. Lambda functions are infrastructure, not runtime logic — they belong in IaC.
+**Terraform for Lambda provisioning over Boto3** — Boto3 scripting for infrastructure is imperative and stateless with no drift detection or rollback. Terraform's declarative model tracks state and allows clean destroy. Lambda functions are infrastructure, not runtime logic — they belong in IaC.
 
-CloudTrail data events on DynamoDB — management events log API-level calls. Data events log item-level operations — PutItem, GetItem — giving a full audit trail of which transactions were written and read. For a pipeline handling financial data, item-level auditability is a security requirement, not an optional extra.
+**CloudTrail data events on DynamoDB** — management events log API-level calls. Data events log item-level operations — `PutItem`, `GetItem` — giving a full audit trail of which transactions were written and read. For a pipeline handling financial data, item-level auditability is a security requirement, not an optional extra.
 
 ---
 
@@ -101,12 +101,12 @@ Confirm the SNS subscription email that arrives in your inbox before testing.
 Invoke Lambda1 from the AWS console or CLI:
 
 ```bash
-aws lambda invoke --function-name lambda1_generator output.json
+aws lambda invoke --function-name lambda1_ingestion_simulator output.json
 ```
 
 Check your email for anomaly alerts. The pipeline processes 20 mock transactions from `lambda/mock_transactions.json`, covering all four anomaly types — successful, failed, timeout, and duplicate.
 
-To test duplicate detection, invoke Lambda1 twice. The second invocation will find existing records in DynamoDB and trigger duplicate alerts.
+To test duplicate detection specifically, invoke a second time. The second invocation will find existing records in DynamoDB and fire duplicate alerts.
 
 ---
 
