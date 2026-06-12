@@ -90,6 +90,19 @@ resource "aws_kms_key" "kms_key" {
           "kms:Decrypt"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "AllowSQStousekey"
+        Effect = "Allow"
+        Principal = {
+          Service = "sqs.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:GenerateDataKey",
+          "kms:Decrypt",
+        ]
+        Resource = "*"
       }
     ]
   })
@@ -121,9 +134,22 @@ resource "aws_cloudtrail" "trails" {
 }
 
 #CloudTrail bucket
+#checkov:skip=CKV_AWS_144:Cross-region replication not required for this use case
 resource "aws_s3_bucket" "dynamodbbucket001" {
   bucket        = "dynamodbtrails1244"
   force_destroy = true
+}
+
+resource "aws_s3_bucket_logging" "logging_bucket" {
+  bucket = aws_s3_bucket.dynamodbbucket001.id
+
+  target_bucket = aws_s3_bucket.dynamodbbucket001.id
+  target_prefix = "log/"
+  target_object_key_format {
+    partitioned_prefix {
+      partition_date_source = "EventTime"
+    }
+  }
 }
 
 #CloudTrail bucket encryption
@@ -132,7 +158,8 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "encrypted" {
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.kms_key.arn
     }
   }
 }
@@ -197,7 +224,8 @@ resource "aws_s3_bucket_policy" "dynamobucket" {
 
 # Dead letter queue for lambda functions
 resource "aws_sqs_queue" "queue_deadletter" {
-  name = "deadletter-queue"
+  name              = "deadletter-queue"
+  kms_master_key_id = aws_kms_key.kms_key.id
 }
 
 #SQS resource poilicy
@@ -365,13 +393,16 @@ data "archive_file" "lambda1" {
 }
 
 # Lambda generator function
+#checkov:skip=CKV_AWS_117:Lambda functions communicate with AWS managed services via IAM-controlled endpoints. VPC not required.
+#checkov:skip=CKV_AWS_272:Code signing not required for this single-developer portfolio project
 resource "aws_lambda_function" "lambda1" {
-  filename      = data.archive_file.lambda1.output_path
-  function_name = "lambda1_generator"
-  role          = aws_iam_role.lambda_1.arn
-  handler       = "lambda1.lambda_generate"
-  code_sha256   = data.archive_file.lambda1.output_base64sha256
-  kms_key_arn   = aws_kms_key.kms_key.arn
+  filename                       = data.archive_file.lambda1.output_path
+  function_name                  = "lambda1_generator"
+  role                           = aws_iam_role.lambda_1.arn
+  handler                        = "lambda1.lambda_generate"
+  code_sha256                    = data.archive_file.lambda1.output_base64sha256
+  kms_key_arn                    = aws_kms_key.kms_key.arn
+  reserved_concurrent_executions = 10
 
   runtime = "python3.13"
 
@@ -491,13 +522,16 @@ data "archive_file" "lambda2" {
 }
 
 # Lambda processor function
+#checkov:skip=CKV_AWS_117:Lambda functions communicate with AWS managed services via IAM-controlled endpoints. VPC not required.
+#checkov:skip=CKV_AWS_272:Code signing not required for this single-developer portfolio project
 resource "aws_lambda_function" "lambda2" {
-  filename      = data.archive_file.lambda2.output_path
-  function_name = "lambda2_processor"
-  role          = aws_iam_role.lambda_2.arn
-  handler       = "lambda2.lambda_processor"
-  code_sha256   = data.archive_file.lambda2.output_base64sha256
-  kms_key_arn   = aws_kms_key.kms_key.arn
+  filename                       = data.archive_file.lambda2.output_path
+  function_name                  = "lambda2_processor"
+  role                           = aws_iam_role.lambda_2.arn
+  handler                        = "lambda2.lambda_processor"
+  code_sha256                    = data.archive_file.lambda2.output_base64sha256
+  kms_key_arn                    = aws_kms_key.kms_key.arn
+  reserved_concurrent_executions = 10
 
   runtime = "python3.13"
 
