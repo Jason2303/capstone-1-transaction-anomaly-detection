@@ -138,8 +138,8 @@ resource "aws_cloudtrail" "trails" {
   sns_topic_name                = aws_sns_topic.output.name
   enable_log_file_validation    = true
   kms_key_id                    = aws_kms_key.kms_key.arn
-  cloud_watch_logs_group_arn = "${aws_cloudwatch_log_group.cloudtrail_loggroup.arn}:*"
-  cloud_watch_logs_role_arn = aws_iam_role.cloudtrail.arn
+  cloud_watch_logs_group_arn    = "${aws_cloudwatch_log_group.cloudtrail_loggroup.arn}:*"
+  cloud_watch_logs_role_arn     = aws_iam_role.cloudtrail.arn
 
   event_selector {
     read_write_type           = "All"
@@ -155,8 +155,9 @@ resource "aws_cloudtrail" "trails" {
 
 #CloudWatch Log Group
 resource "aws_cloudwatch_log_group" "cloudtrail_loggroup" {
-  name = "CTLogGroup"
-  kms_key_id = aws_kms_key.kms_key.arn
+  name              = "CTLogGroup"
+  kms_key_id        = aws_kms_key.kms_key.arn
+  retention_in_days = 365
 
   tags = {
     Environment = "Production"
