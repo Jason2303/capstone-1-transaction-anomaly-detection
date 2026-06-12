@@ -71,6 +71,8 @@ All alerts are published to SNS with full transaction detail — transaction ID,
 - **SQS encryption** — CMK-encrypted dead letter queue
 - **Checkov** — automated IaC security scanning in GitHub Actions on every push to `main`
 
+See [THREAT_MODEL.md](THREAT_MODEL.md) for full threat analysis.
+
 ---
 
 ## Prerequisites
