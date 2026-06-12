@@ -20,7 +20,7 @@ This pipeline simulates the detection layer that sits between a payment processo
 
 ---
 
-How It Works
+## How It Works
 
 The pipeline ingests 20 mock transactions from lambda/mock_transactions.json, each representing a debit payment in a Nigerian banking context. Lambda1 publishes each transaction as an event to a custom EventBridge bus, which routes it to Lambda2 for anomaly detection.
 Lambda2 runs four independent checks on every transaction:
@@ -32,7 +32,7 @@ All alerts are published to SNS with full transaction detail — transaction ID,
 
 ---
 
-Design Decisions
+## Design Decisions
 
 DynamoDB over RDS — this pipeline processes discrete transaction events, not relational data requiring joins. DynamoDB's single-table design maps directly to the event schema, eliminates connection pooling overhead in Lambda, and scales to zero cost when idle.
 
@@ -52,9 +52,7 @@ aws_iam_role_policy_attachment over aws_iam_role_policy_attachments_exclusive �
 
 Terraform for Lambda provisioning over Boto3 — Boto3 scripting for infrastructure is imperative and stateless with no drift detection or rollback. Terraform's declarative model tracks state and allows clean destroy. Lambda functions are infrastructure, not runtime logic — they belong in IaC.
 
----
-
-# CloudTrail data events on DynamoDB — management events log API-level calls. Data events log item-level operations — PutItem, GetItem — giving a full audit trail of which transactions were written and read. For a pipeline handling financial data, item-level auditability is a security requirement, not an optional extra.
+CloudTrail data events on DynamoDB — management events log API-level calls. Data events log item-level operations — PutItem, GetItem — giving a full audit trail of which transactions were written and read. For a pipeline handling financial data, item-level auditability is a security requirement, not an optional extra.
 
 ---
 
