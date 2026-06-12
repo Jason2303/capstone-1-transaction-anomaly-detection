@@ -40,7 +40,7 @@ def duplicate(event, context):
 def format_message(event, anomaly_type):
     d = event['detail']
     return (
-        f"ANOMALY DETECTED: {anomaly_type}\n\n"
+        f"ALERT: {anomaly_type}\n\n"
         f"Transaction ID:   {d['transaction_id']}\n"
         f"Type:             {d['transaction_type']}\n"
         f"Beneficiary:      {d['beneficiary_name']} ({d['to_account']})\n"
@@ -58,26 +58,26 @@ def lambda_processor(event, context):
         response = sns.publish(
         TopicArn=os.environ.get('SNS_TOPIC_ARN'),
         Message=format_message(event, 'Successful Payment'),
-        Subject= event['detail']['transaction_id'] + ' was Successful.',
+        Subject= event['detail']['transaction_id'] + ' - Payment Confirmed.',
     )
     
     if failed(event, context):
         response = sns.publish(
         TopicArn=os.environ.get('SNS_TOPIC_ARN'),
         Message=format_message(event, 'Failed Payment'),
-        Subject= event['detail']['transaction_id'] + ' Failed.',
+        Subject= event['detail']['transaction_id'] + ' - Failed.',
     )
         
     if timeout(event, context):
         response = sns.publish(
         TopicArn=os.environ.get('SNS_TOPIC_ARN'),
         Message=format_message(event, 'Timeout'),
-        Subject= event['detail']['transaction_id'] + ' Timed Out.',
+        Subject= event['detail']['transaction_id'] + ' - Timed Out.',
     )
         
     if duplicate(event, context):
         response = sns.publish(
         TopicArn=os.environ.get('SNS_TOPIC_ARN'),
         Message=format_message(event, 'Duplicate Charge'),
-        Subject=event['detail']['transaction_id'] + ' was a Duplicate Payment.'
+        Subject=event['detail']['transaction_id'] + ' - was a Duplicate Payment.'
     )

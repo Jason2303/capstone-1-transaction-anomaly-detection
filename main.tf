@@ -153,7 +153,7 @@ resource "aws_cloudtrail" "trails" {
 
 }
 
-#CloudWatch Log Group
+#CloudWatch Log Group dor CloudTrail
 resource "aws_cloudwatch_log_group" "cloudtrail_loggroup" {
   name              = "CTLogGroup"
   kms_key_id        = aws_kms_key.kms_key.arn
@@ -212,6 +212,7 @@ resource "aws_iam_policy" "cloudtrail_policy" {
   })
 }
 
+#IAM role and policy attachment for CloudTrail
 resource "aws_iam_role_policy_attachment" "cloudtrail_attach" {
   role       = aws_iam_role.cloudtrail.name
   policy_arn = aws_iam_policy.cloudtrail_policy.arn
@@ -227,6 +228,7 @@ resource "aws_s3_bucket" "dynamodbbucket001" {
   force_destroy = true
 }
 
+#Logging resource for CloudTrail bucket
 resource "aws_s3_bucket_logging" "logging_bucket" {
   bucket = aws_s3_bucket.dynamodbbucket001.id
 
@@ -239,6 +241,7 @@ resource "aws_s3_bucket_logging" "logging_bucket" {
   }
 }
 
+#To block public access on CloudTrail bucket
 resource "aws_s3_bucket_public_access_block" "block_public_access" {
   bucket = aws_s3_bucket.dynamodbbucket001.id
 
@@ -268,7 +271,7 @@ resource "aws_s3_bucket_versioning" "versioning" {
   }
 }
 
-#IAM Policy on S3 Cloudtrail bucket
+#IAM Policy on Cloudtrail bucket
 data "aws_iam_policy_document" "dynamodbbucket" {
   statement {
     sid    = "AWSCloudTrailAclCheck"
@@ -313,12 +316,13 @@ data "aws_iam_policy_document" "dynamodbbucket" {
   }
 }
 
+#CloudTrail bucket attachment to IAM policy
 resource "aws_s3_bucket_policy" "dynamobucket" {
   bucket = aws_s3_bucket.dynamodbbucket001.id
   policy = data.aws_iam_policy_document.dynamodbbucket.json
 }
 
-# Dead letter queue for lambda functions
+#Dead letter queue for lambda functions
 resource "aws_sqs_queue" "queue_deadletter" {
   name              = "deadletter-queue"
   kms_master_key_id = aws_kms_key.kms_key.id
@@ -367,6 +371,7 @@ resource "aws_sns_topic_policy" "sns_policy" {
   policy = data.aws_iam_policy_document.sns_topic_policy.json
 }
 
+#Policy document for SNS Topic
 data "aws_iam_policy_document" "sns_topic_policy" {
   policy_id = "AllowCloudTrail"
 
@@ -397,17 +402,6 @@ data "aws_iam_policy_document" "sns_topic_policy" {
 
     sid = "ToAllowCloudTrail"
   }
-}
-
-#Eventbridge to send requests from Lambda1 to Lambda2. Has not been connected yet
-resource "aws_cloudwatch_event_bus" "transaction_event_bus" {
-  name = "transaction-event-bus"
-
-  tags = {
-    Name        = "Transaction Event Bus"
-    Environment = "Production"
-  }
-
 }
 
 #IAM execution role for lambda1
@@ -476,27 +470,28 @@ resource "aws_iam_policy" "lambda1_policy" {
   })
 }
 
+#Lambda1 IAM role and policy attachment
 resource "aws_iam_role_policy_attachment" "lambda_attach_1" {
   role       = aws_iam_role.lambda_1.name
   policy_arn = aws_iam_policy.lambda1_policy.arn
 }
 
-# Package the Lambda1 function code
+#Package the Lambda1 function code
 data "archive_file" "lambda1" {
   type        = "zip"
-  source_file = "${path.module}/lambda1.py"
+  source_dir = "${path.module}/lambda"
   output_path = "${path.module}/lambda1.zip"
 }
 
-# Lambda generator function
+#Lambda ingestion simulator
 #checkov:skip=CKV_AWS_117:Lambda functions communicate with AWS managed services via IAM-controlled endpoints. VPC not required.
 #checkov:skip=CKV_AWS_272:Code signing not required for this single-developer portfolio project
 #checkov:skip=CKV_AWS_115:Reserved concurrency not supported on this account tier
 resource "aws_lambda_function" "lambda1" {
   filename                       = data.archive_file.lambda1.output_path
-  function_name                  = "lambda1_generator"
+  function_name                  = "lambda_ingestion_simulator"
   role                           = aws_iam_role.lambda_1.arn
-  handler                        = "lambda1.lambda_generate"
+  handler                        = "lambda1.lambda_ingest"
   code_sha256                    = data.archive_file.lambda1.output_base64sha256
   kms_key_arn                    = aws_kms_key.kms_key.arn
 
@@ -522,7 +517,7 @@ resource "aws_lambda_function" "lambda1" {
 
   tags = {
     Environment = "Production"
-    Application = "Transaction Generator"
+    Application = "Transaction Ingestion Simulator"
   }
 }
 
@@ -604,20 +599,20 @@ resource "aws_iam_policy" "lambda2_policy" {
   })
 }
 
-#Attaches IAM Role and Policy to Lambda2
+#Lambda1 IAM role and policy attachment
 resource "aws_iam_role_policy_attachment" "lambda_attach_2" {
   role       = aws_iam_role.lambda_2.name
   policy_arn = aws_iam_policy.lambda2_policy.arn
 }
 
-# Package the Lambda2 function code
+#Package the Lambda2 function code
 data "archive_file" "lambda2" {
   type        = "zip"
-  source_file = "${path.module}/lambda2.py"
+  source_file = "${path.module}/lambda/lambda2.py"
   output_path = "${path.module}/lambda2.zip"
 }
 
-# Lambda processor function
+#Lambda processor function
 #checkov:skip=CKV_AWS_117:Lambda functions communicate with AWS managed services via IAM-controlled endpoints. VPC not required.
 #checkov:skip=CKV_AWS_272:Code signing not required for this single-developer portfolio project
 #checkov:skip=CKV_AWS_115:Reserved concurrency not supported on this account tier
@@ -636,11 +631,12 @@ resource "aws_lambda_function" "lambda2" {
     mode = "Active"
   }
 
-  # For messages not sent to SNS
+  #For messages not sent to SNS
   dead_letter_config {
     target_arn = aws_sqs_queue.queue_deadletter.arn
   }
-
+  
+  #Environment variables
   environment {
     variables = {
       ENVIRONMENT   = "Production"
@@ -653,6 +649,17 @@ resource "aws_lambda_function" "lambda2" {
     Environment = "Production"
     Application = "Transaction Processor"
   }
+}
+
+#EventBridge Bus
+resource "aws_cloudwatch_event_bus" "transaction_event_bus" {
+  name = "transaction-event-bus"
+
+  tags = {
+    Name        = "Transaction Event Bus"
+    Environment = "Production"
+  }
+
 }
 
 #EventBridge Rule

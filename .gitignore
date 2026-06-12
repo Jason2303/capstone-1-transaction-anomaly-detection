@@ -8,6 +8,7 @@ terraform.tfstate.backup
 # Lambda zip packages
 lambda1.zip
 lambda2.zip
+lambda/*.zip
 
 #IDE
 .idea/
