@@ -21,6 +21,7 @@ This pipeline simulates the detection layer that sits between a payment processo
 ---
 
 How It Works
+
 The pipeline ingests 20 mock transactions from lambda/mock_transactions.json, each representing a debit payment in a Nigerian banking context. Lambda1 publishes each transaction as an event to a custom EventBridge bus, which routes it to Lambda2 for anomaly detection.
 Lambda2 runs four independent checks on every transaction:
 Successful payment — requested_amount == approved_amount. The full amount was approved. An SNS alert is fired confirming the transaction completed as expected.
@@ -29,27 +30,33 @@ Timeout — the difference between transaction_time and approved_time exceeds 5 
 Duplicate charge — a PutItem with attribute_not_exists(transaction_id) is attempted. If DynamoDB rejects the write with ConditionalCheckFailedException, the transaction ID already exists, indicating a retry-induced duplicate charge. An alert is fired immediately.
 All alerts are published to SNS with full transaction detail — transaction ID, beneficiary, amounts, bank, and timestamps — and delivered to the subscribed email address as well as CloudTrail logs.
 
-## Design Decisions
+---
 
-# DynamoDB over RDS — this pipeline processes discrete transaction events, not relational data requiring joins. DynamoDB's single-table design maps directly to the event schema, eliminates connection pooling overhead in Lambda, and scales to zero cost when idle.
+Design Decisions
 
-# DynamoDB over S3 — S3 is object storage optimised for files, not low-latency key-value lookups. Duplicate detection requires single-item reads with millisecond response times. DynamoDB's GetItem and conditional PutItem operations are purpose-built for this pattern; S3 is not.
+DynamoDB over RDS — this pipeline processes discrete transaction events, not relational data requiring joins. DynamoDB's single-table design maps directly to the event schema, eliminates connection pooling overhead in Lambda, and scales to zero cost when idle.
 
-# PAY_PER_REQUEST over provisioned capacity — transaction volume is unpredictable and bursty. Provisioned capacity requires capacity planning and risks over/under-provisioning. On-demand billing means cost tracks actual usage with no idle overhead.
+DynamoDB over S3 — S3 is object storage optimised for files, not low-latency key-value lookups. Duplicate detection requires single-item reads with millisecond response times. DynamoDB's GetItem and conditional PutItem operations are purpose-built for this pattern; S3 is not.
 
-# No multi-AZ replicas — this is a detection and alerting pipeline, not a financial transaction processor. The source of truth remains the bank's core system. Replica lag and added cost are not justified for an anomaly notification service.
+PAY_PER_REQUEST over provisioned capacity — transaction volume is unpredictable and bursty. Provisioned capacity requires capacity planning and risks over/under-provisioning. On-demand billing means cost tracks actual usage with no idle overhead.
 
-# EventBridge over SQS for event routing — SQS is a queue; EventBridge is an event bus. The pipeline routes transaction events based on source and detail-type, which is a filtering and routing concern. EventBridge's rule-based routing to Lambda is a cleaner fit. SQS is still used where it belongs — as a Dead Letter Queue for failed Lambda invocations.
+No multi-AZ replicas — this is a detection and alerting pipeline, not a financial transaction processor. The source of truth remains the bank's core system. Replica lag and added cost are not justified for an anomaly notification service.
 
-# Conditional writes for duplicate detection — attribute_not_exists(transaction_id) on PutItem makes duplicate detection atomic, eliminating the race condition that a GetItem + PutItem approach creates under concurrent Lambda execution.
+EventBridge over SQS for event routing — SQS is a queue; EventBridge is an event bus. The pipeline routes transaction events based on source and detail-type, which is a filtering and routing concern. EventBridge's rule-based routing to Lambda is a cleaner fit. SQS is still used where it belongs — as a Dead Letter Queue for failed Lambda invocations.
 
-# No VPC — Lambda communicates with DynamoDB, SNS, EventBridge, and SQS via AWS-managed endpoints controlled by IAM. A VPC would add NAT Gateway cost and network complexity without improving the security posture for this architecture.
+Conditional writes for duplicate detection — attribute_not_exists(transaction_id) on PutItem makes duplicate detection atomic, eliminating the race condition that a GetItem + PutItem approach creates under concurrent Lambda execution.
 
-# aws_iam_role_policy_attachment over aws_iam_role_policy_attachments_exclusive — the exclusive variant has a known teardown ordering issue that causes DeletePolicy failures during terraform destroy. The standard attachment resource detaches cleanly and avoids requiring multiple destroy runs.
+No VPC — Lambda communicates with DynamoDB, SNS, EventBridge, and SQS via AWS-managed endpoints controlled by IAM. A VPC would add NAT Gateway cost and network complexity without improving the security posture for this architecture.
 
-# Terraform for Lambda provisioning over Boto3 — Boto3 scripting for infrastructure is imperative and stateless with no drift detection or rollback. Terraform's declarative model tracks state and allows clean destroy. Lambda functions are infrastructure, not runtime logic — they belong in IaC.
+aws_iam_role_policy_attachment over aws_iam_role_policy_attachments_exclusive — the exclusive variant has a known teardown ordering issue that causes DeletePolicy failures during terraform destroy. The standard attachment resource detaches cleanly and avoids requiring multiple destroy runs.
+
+Terraform for Lambda provisioning over Boto3 — Boto3 scripting for infrastructure is imperative and stateless with no drift detection or rollback. Terraform's declarative model tracks state and allows clean destroy. Lambda functions are infrastructure, not runtime logic — they belong in IaC.
+
+---
 
 # CloudTrail data events on DynamoDB — management events log API-level calls. Data events log item-level operations — PutItem, GetItem — giving a full audit trail of which transactions were written and read. For a pipeline handling financial data, item-level auditability is a security requirement, not an optional extra.
+
+---
 
 ## Security Controls
 
