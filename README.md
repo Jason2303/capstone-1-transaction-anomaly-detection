@@ -24,6 +24,7 @@ This pipeline simulates the detection layer that sits between a payment processo
 
 The pipeline ingests 20 mock transactions from `lambda/mock_transactions.json`, each representing a debit payment in a Nigerian banking context. Lambda1 publishes each transaction as an event to a custom EventBridge bus, which routes it to Lambda2 for anomaly detection.
 Lambda2 runs four independent checks on every transaction:
+
 **Successful payment** — `requested_amount == approved_amount`. The full amount was approved. An SNS alert is fired confirming the transaction completed as expected.
 
 **Failed payment** — `requested_amount > approved_amount`. The bank approved a partial amount or nothing at all. Common in Nigerian banking when accounts have insufficient funds or the receiving bank rejects the full transfer. An alert is fired with both amounts for reconciliation.
