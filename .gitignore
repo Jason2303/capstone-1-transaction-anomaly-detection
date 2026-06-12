@@ -1,0 +1,13 @@
+# Terraform
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+*.tfstate
+*.tfstate.*
+
+# Lambda zip packages
+lambda1.zip
+lambda2.zip
+
+#IDE
+.idea/
