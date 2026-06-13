@@ -22,6 +22,8 @@ This pipeline simulates the detection layer that sits between a payment processo
 
 ## How It Works
 
+Lambda 1 acts as an ingestor. The mock payments are packaged within the `lambda/` directory and deployed as part of the Lambda function. Once it has detected a payment file, it pushes it to Eventbridge. Eventbridge invokes the second Lambda function. Lambda 2 processes each payment for 4 independent checks and pushes notifications to the email provided by the tester. The Dead Letter Queue is configured to catch failed Lambda invocations. Cloudwatch is configured to receive logs from both Lambda functions directly. Cloudtrail is configured separately to send its own logs to CloudWatch. Lambda 2 is configured to read and write from DynamoDB to receive transactions to find double payments by matching the transaction_id to the ones existing within the table and to write new payments that it compares against in the future. CloudTrail sends trails to SNS to notify the user when it has stored CloudTrail events within the S3 bucket configured to it for retention. All components are configured to be encrypted with KMS and the IAM Policies are least privilege.
+
 The pipeline ingests 20 mock transactions from `lambda/mock_transactions.json`, each representing a debit payment in a Nigerian banking context. Lambda1 publishes each transaction as an event to a custom EventBridge bus, which routes it to Lambda2 for anomaly detection.
 Lambda2 runs four independent checks on every transaction:
 
@@ -32,6 +34,7 @@ Lambda2 runs four independent checks on every transaction:
 **Timeout** — the difference between `transaction_time` and `approved_time` exceeds 5 minutes. Prolonged approval times indicate network congestion, USSD session drops, or downstream bank delays — a chronic issue on Nigerian payment rails. An alert is fired with the transaction timestamp for investigation.
 
 **Duplicate charge** — a `PutItem` with `attribute_not_exists(transaction_id)` is attempted. If DynamoDB rejects the write with `ConditionalCheckFailedException`, the transaction ID already exists, indicating a retry-induced duplicate charge. An alert is fired immediately.
+
 All alerts are published to SNS with full transaction detail — transaction ID, beneficiary, amounts, bank, and timestamps — and delivered to the subscribed email address as well as CloudTrail logs.
 
 ---
